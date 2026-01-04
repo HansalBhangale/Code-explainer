@@ -6,11 +6,12 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 import logging
 
-from src.models import Repo, Snapshot, File, SnapshotStatus, SourceType
+from src.models import Repo, Snapshot, File, Import, SnapshotStatus, SourceType
 from src.database import db
-from src.database.repository import RepositoryDAO, SnapshotDAO, FileDAO, SymbolDAO
+from src.database.repository import RepositoryDAO, SnapshotDAO, FileDAO, SymbolDAO, ImportDAO
 from src.services.repo_loader import RepositoryLoader
 from src.services.file_scanner import FileScanner
+from src.services.import_resolver import ImportResolver
 from src.parsers.python_parser import PythonASTParser
 
 logger = logging.getLogger(__name__)
@@ -128,6 +129,8 @@ class RepositoryIngestor:
             # Process files by language
             all_files = []
             all_symbols = []
+            all_imports_data = []  # Store raw import data
+            file_path_to_id = {}  # Map file paths to file IDs
             
             for language, file_paths in files_by_language.items():
                 logger.info(f"Processing {len(file_paths)} {language} files...")
@@ -146,15 +149,22 @@ class RepositoryIngestor:
                         tags=[]
                     )
                     all_files.append(file)
+                    file_path_to_id[str(relative_path)] = file.file_id
                     
                     # Parse Python files
                     if language == "python":
-                        symbols = self.python_parser.parse_file(
+                        symbols, imports = self.python_parser.parse_file(
                             file_path,
                             file.file_id,
                             snapshot.snapshot_id
                         )
                         all_symbols.extend(symbols)
+                        
+                        # Store import data with file info
+                        for imp_data in imports:
+                            imp_data['file_id'] = file.file_id
+                            imp_data['file_path'] = str(relative_path)
+                        all_imports_data.extend(imports)
             
             # Process large files (index without parsing)
             if large_files:
@@ -182,6 +192,54 @@ class RepositoryIngestor:
             if all_symbols:
                 logger.info(f"Persisting {len(all_symbols)} symbols to database...")
                 SymbolDAO.batch_create_symbols(all_symbols)
+            
+            # Process imports and build import graph
+            if all_imports_data:
+                logger.info(f"Processing {len(all_imports_data)} import statements...")
+                
+                # Create import resolver
+                resolver = ImportResolver(repo_path, file_path_to_id)
+                
+                # Create Import objects and resolve dependencies
+                all_imports = []
+                import_edges = []
+                
+                for imp_data in all_imports_data:
+                    # Create Import object
+                    import_obj = Import(
+                        snapshot_id=snapshot.snapshot_id,
+                        file_id=imp_data['file_id'],
+                        module=imp_data['module'],
+                        imported_names=imp_data['imported_names'],
+                        alias=imp_data['alias'],
+                        is_relative=imp_data['is_relative'],
+                        line_number=imp_data['line_number']
+                    )
+                    all_imports.append(import_obj)
+                    
+                    # Resolve import to file ID
+                    target_file_id = resolver.resolve_import(
+                        imp_data['module'],
+                        imp_data['file_path'],
+                        imp_data['is_relative']
+                    )
+                    
+                    # Create edge if target is internal
+                    if target_file_id:
+                        import_edges.append({
+                            'src_file_id': imp_data['file_id'],
+                            'dst_file_id': target_file_id,
+                            'module': imp_data['module'],
+                            'line_number': imp_data['line_number']
+                        })
+                
+                # Batch insert imports
+                ImportDAO.batch_create_imports(all_imports)
+                
+                # Batch create import edges
+                if import_edges:
+                    logger.info(f"Creating {len(import_edges)} import relationships...")
+                    ImportDAO.batch_create_import_edges(import_edges)
             
             # Update snapshot status
             SnapshotDAO.update_snapshot_status(

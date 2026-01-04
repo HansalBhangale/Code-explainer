@@ -7,7 +7,7 @@ import json
 from datetime import datetime
 
 from src.database import db
-from src.models import Repo, Snapshot, File, Symbol, Endpoint, SnapshotStatus
+from src.models import Repo, Snapshot, File, Symbol, Endpoint, SnapshotStatus, Import
 
 logger = logging.getLogger(__name__)
 
@@ -399,3 +399,157 @@ class SymbolDAO:
         
         db.execute_write(query, {"symbols": symbols_data})
         logger.info(f"Batch created {len(symbols)} symbols")
+
+
+class ImportDAO:
+    """Data Access Object for Import operations"""
+    
+    @staticmethod
+    def batch_create_imports(imports: List[Import]) -> None:
+        """Batch create import nodes
+        
+        Args:
+            imports: List of Import instances
+        """
+        if not imports:
+            return
+        
+        query = """
+        UNWIND $imports AS imp_data
+        MATCH (f:File {file_id: imp_data.file_id})
+        CREATE (i:Import {
+            import_id: imp_data.import_id,
+            snapshot_id: imp_data.snapshot_id,
+            file_id: imp_data.file_id,
+            module: imp_data.module,
+            imported_names: imp_data.imported_names,
+            alias: imp_data.alias,
+            is_relative: imp_data.is_relative,
+            line_number: imp_data.line_number
+        })
+        CREATE (f)-[:HAS_IMPORT]->(i)
+        """
+        
+        imports_data = [
+            {
+                "import_id": i.import_id,
+                "snapshot_id": i.snapshot_id,
+                "file_id": i.file_id,
+                "module": i.module,
+                "imported_names": json.dumps(i.imported_names),
+                "alias": i.alias,
+                "is_relative": i.is_relative,
+                "line_number": i.line_number
+            }
+            for i in imports
+        ]
+        
+        db.execute_write(query, {"imports": imports_data})
+        logger.info(f"Batch created {len(imports)} imports")
+    
+    @staticmethod
+    def create_import_edge(
+        src_file_id: str,
+        dst_file_id: str,
+        module_name: str,
+        line_number: int
+    ) -> None:
+        """Create IMPORTS relationship between files
+        
+        Args:
+            src_file_id: Source file ID
+            dst_file_id: Destination file ID
+            module_name: Module being imported
+            line_number: Line number of import
+        """
+        query = """
+        MATCH (src:File {file_id: $src_file_id})
+        MATCH (dst:File {file_id: $dst_file_id})
+        MERGE (src)-[r:IMPORTS {module: $module_name}]->(dst)
+        ON CREATE SET r.line_number = $line_number
+        """
+        
+        db.execute_write(query, {
+            "src_file_id": src_file_id,
+            "dst_file_id": dst_file_id,
+            "module_name": module_name,
+            "line_number": line_number
+        })
+    
+    @staticmethod
+    def batch_create_import_edges(edges: List[Dict[str, Any]]) -> None:
+        """Batch create import edges
+        
+        Args:
+            edges: List of edge dictionaries with src_file_id, dst_file_id, module, line
+        """
+        if not edges:
+            return
+        
+        query = """
+        UNWIND $edges AS edge
+        MATCH (src:File {file_id: edge.src_file_id})
+        MATCH (dst:File {file_id: edge.dst_file_id})
+        MERGE (src)-[r:IMPORTS {module: edge.module}]->(dst)
+        ON CREATE SET r.line_number = edge.line_number
+        """
+        
+        db.execute_write(query, {"edges": edges})
+        logger.info(f"Batch created {len(edges)} import edges")
+    
+    @staticmethod
+    def get_file_imports(file_id: str) -> List[Dict[str, Any]]:
+        """Get all imports for a file
+        
+        Args:
+            file_id: File ID
+            
+        Returns:
+            List of import dictionaries
+        """
+        query = """
+        MATCH (f:File {file_id: $file_id})-[:IMPORTS]->(imported:File)
+        RETURN imported.file_id as file_id, imported.path as path
+        """
+        return db.execute_query(query, {"file_id": file_id})
+    
+    @staticmethod
+    def get_import_graph(snapshot_id: str) -> List[Dict[str, Any]]:
+        """Get the complete import dependency graph
+        
+        Args:
+            snapshot_id: Snapshot ID
+            
+        Returns:
+            List of import relationships
+        """
+        query = """
+        MATCH (src:File)-[r:IMPORTS]->(dst:File)
+        WHERE src.snapshot_id = $snapshot_id
+        RETURN src.path as source, dst.path as target, r.module as module
+        ORDER BY src.path
+        """
+        return db.execute_query(query, {"snapshot_id": snapshot_id})
+    
+    @staticmethod
+    def get_file_dependencies(snapshot_id: str, file_path: str) -> List[Dict[str, Any]]:
+        """Get all files that depend on this file (reverse dependencies)
+        
+        Args:
+            snapshot_id: Snapshot ID
+            file_path: File path to find dependencies for
+            
+        Returns:
+            List of dependent files
+        """
+        query = """
+        MATCH (dependent:File)-[:IMPORTS]->(f:File {path: $file_path})
+        WHERE f.snapshot_id = $snapshot_id
+        RETURN dependent.path as dependent_file, dependent.file_id as file_id
+        ORDER BY dependent.path
+        """
+        return db.execute_query(query, {
+            "snapshot_id": snapshot_id,
+            "file_path": file_path
+        })
+

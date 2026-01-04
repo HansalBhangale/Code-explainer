@@ -24,8 +24,8 @@ class PythonASTParser:
         file_path: Path,
         file_id: str,
         snapshot_id: str
-    ) -> List[Symbol]:
-        """Parse a Python file and extract symbols
+    ) -> tuple[List[Symbol], List[Dict[str, Any]]]:
+        """Parse a Python file and extract symbols and imports
         
         Args:
             file_path: Path to Python file
@@ -33,7 +33,7 @@ class PythonASTParser:
             snapshot_id: Snapshot ID
             
         Returns:
-            List of Symbol instances
+            Tuple of (symbols list, imports list)
         """
         self.current_file_id = file_id
         self.current_snapshot_id = snapshot_id
@@ -45,16 +45,17 @@ class PythonASTParser:
             
             tree = ast.parse(source, filename=str(file_path))
             symbols = self._extract_symbols(tree)
+            imports = self._extract_imports(tree)
             
-            logger.debug(f"Extracted {len(symbols)} symbols from {file_path.name}")
-            return symbols
+            logger.debug(f"Extracted {len(symbols)} symbols and {len(imports)} imports from {file_path.name}")
+            return symbols, imports
             
         except SyntaxError as e:
             logger.error(f"Syntax error in {file_path}: {e}")
-            return []
+            return [], []
         except Exception as e:
             logger.error(f"Failed to parse {file_path}: {e}")
-            return []
+            return [], []
     
     def _extract_symbols(self, tree: ast.AST) -> List[Symbol]:
         """Extract symbols from AST
@@ -264,3 +265,52 @@ class PythonASTParser:
                     return True
         
         return False
+    
+    def _extract_imports(self, tree: ast.AST) -> List[Dict[str, Any]]:
+        """Extract import statements from AST
+        
+        Args:
+            tree: AST tree
+            
+        Returns:
+            List of import dictionaries
+        """
+        imports = []
+        
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                # Handle: import module [as alias]
+                for alias in node.names:
+                    imports.append({
+                        "module": alias.name,
+                        "imported_names": [],
+                        "alias": alias.asname,
+                        "is_relative": False,
+                        "line_number": node.lineno
+                    })
+            
+            elif isinstance(node, ast.ImportFrom):
+                # Handle: from module import name [as alias]
+                module = node.module or ""
+                is_relative = node.level > 0
+                
+                # Handle relative imports (., ..)
+                if is_relative:
+                    module = "." * node.level + module
+                
+                imported_names = []
+                for alias in node.names:
+                    imported_names.append({
+                        "name": alias.name,
+                        "alias": alias.asname
+                    })
+                
+                imports.append({
+                    "module": module,
+                    "imported_names": imported_names,
+                    "alias": None,
+                    "is_relative": is_relative,
+                    "line_number": node.lineno
+                })
+        
+        return imports

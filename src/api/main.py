@@ -302,6 +302,89 @@ async def list_files(snapshot_id: str):
         )
 
 
+# ============================================================================
+# Import Graph Endpoints
+# ============================================================================
+
+@app.get("/api/v1/files/{file_id}/imports")
+async def get_file_imports(file_id: str):
+    """Get all imports for a specific file
+    
+    Args:
+        file_id: File ID
+        
+    Returns:
+        List of imported files
+    """
+    try:
+        from src.database.repository import ImportDAO
+        imports = ImportDAO.get_file_imports(file_id)
+        return {
+            "file_id": file_id,
+            "imports": imports
+        }
+    except Exception as e:
+        logger.error(f"Failed to get file imports: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.get("/api/v1/snapshots/{snapshot_id}/import-graph")
+async def get_import_graph(snapshot_id: str):
+    """Get the complete import dependency graph for a snapshot
+    
+    Args:
+        snapshot_id: Snapshot ID
+        
+    Returns:
+        Import dependency graph
+    """
+    try:
+        from src.database.repository import ImportDAO
+        graph = ImportDAO.get_import_graph(snapshot_id)
+        return {
+            "snapshot_id": snapshot_id,
+            "edges": graph,
+            "node_count": len(set([e["source"] for e in graph] + [e["target"] for e in graph])),
+            "edge_count": len(graph)
+        }
+    except Exception as e:
+        logger.error(f"Failed to get import graph: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.get("/api/v1/snapshots/{snapshot_id}/dependencies/{file_path:path}")
+async def get_file_dependencies(snapshot_id: str, file_path: str):
+    """Get all files that depend on this file (reverse dependencies)
+    
+    Args:
+        snapshot_id: Snapshot ID
+        file_path: File path to find dependencies for
+        
+    Returns:
+        List of dependent files
+    """
+    try:
+        from src.database.repository import ImportDAO
+        dependencies = ImportDAO.get_file_dependencies(snapshot_id, file_path)
+        return {
+            "file_path": file_path,
+            "dependent_files": dependencies,
+            "dependent_count": len(dependencies)
+        }
+    except Exception as e:
+        logger.error(f"Failed to get file dependencies: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(

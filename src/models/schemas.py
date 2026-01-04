@@ -102,6 +102,18 @@ class Symbol(BaseModel):
     meta: Dict[str, Any] = Field(default_factory=dict)
 
 
+class Import(BaseModel):
+    """Import statement"""
+    import_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    snapshot_id: str
+    file_id: str
+    module: str  # e.g., "os", "pathlib", "src.models"
+    imported_names: List[Dict[str, Optional[str]]] = Field(default_factory=list)  # [{"name": "Path", "alias": None}]
+    alias: Optional[str] = None  # For "import pandas as pd"
+    is_relative: bool = False
+    line_number: int
+
+
 class Endpoint(BaseModel):
     """FastAPI endpoint definition"""
     endpoint_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
