@@ -1,0 +1,38 @@
+# Core Framework
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+
+# Database
+neo4j
+
+# Code Analysis
+ast-comments
+libcst
+tree-sitter
+tree-sitter-python
+
+# Git Operations
+gitpython
+
+# Embeddings & AI
+google-generativeai==0.3.2
+sentence-transformers==2.3.1
+
+# Utilities
+python-dotenv
+httpx
+tenacity
+rich
+typer
+
+# Testing
+pytest
+pytest-asyncio
+pytest-cov
+
+# Development
+black
+ruff
+mypy
