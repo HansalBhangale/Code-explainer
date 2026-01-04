@@ -6,13 +6,17 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 import logging
 
-from src.models import Repo, Snapshot, File, Import, SnapshotStatus, SourceType
+from src.models import Repo, Snapshot, File, Import, Endpoint, Dependency, ModelUsage, SnapshotStatus, SourceType
 from src.database import db
-from src.database.repository import RepositoryDAO, SnapshotDAO, FileDAO, SymbolDAO, ImportDAO
+from src.database.repository import (
+    RepositoryDAO, SnapshotDAO, FileDAO, SymbolDAO, ImportDAO,
+    EndpointDAO, DependencyDAO, ModelUsageDAO
+)
 from src.services.repo_loader import RepositoryLoader
 from src.services.file_scanner import FileScanner
 from src.services.import_resolver import ImportResolver
 from src.parsers.python_parser import PythonASTParser
+from src.parsers.fastapi_parser import FastAPIParser
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +28,7 @@ class RepositoryIngestor:
         self.repo_loader = RepositoryLoader()
         self.file_scanner = FileScanner()
         self.python_parser = PythonASTParser()
+        self.fastapi_parser = FastAPIParser()
     
     def ingest_git_repository(
         self,
@@ -130,7 +135,11 @@ class RepositoryIngestor:
             all_files = []
             all_symbols = []
             all_imports_data = []  # Store raw import data
+            all_fastapi_endpoints = []  # Store FastAPI endpoints
+            all_fastapi_dependencies = []  # Store dependencies
+            all_fastapi_model_usages = []  # Store model usages
             file_path_to_id = {}  # Map file paths to file IDs
+            symbol_by_name = {}  # Map function names to symbol IDs
             
             for language, file_paths in files_by_language.items():
                 logger.info(f"Processing {len(file_paths)} {language} files...")
@@ -160,11 +169,25 @@ class RepositoryIngestor:
                         )
                         all_symbols.extend(symbols)
                         
+                        # Build symbol name mapping
+                        for symbol in symbols:
+                            symbol_by_name[symbol.name] = symbol.symbol_id
+                        
                         # Store import data with file info
                         for imp_data in imports:
                             imp_data['file_id'] = file.file_id
                             imp_data['file_path'] = str(relative_path)
                         all_imports_data.extend(imports)
+                        
+                        # Parse FastAPI constructs
+                        fastapi_data = self.fastapi_parser.parse_file(
+                            file_path,
+                            file.file_id,
+                            snapshot.snapshot_id
+                        )
+                        all_fastapi_endpoints.extend(fastapi_data["endpoints"])
+                        all_fastapi_dependencies.extend(fastapi_data["dependencies"])
+                        all_fastapi_model_usages.extend(fastapi_data["model_usages"])
             
             # Process large files (index without parsing)
             if large_files:
@@ -192,6 +215,80 @@ class RepositoryIngestor:
             if all_symbols:
                 logger.info(f"Persisting {len(all_symbols)} symbols to database...")
                 SymbolDAO.batch_create_symbols(all_symbols)
+            
+            # Process FastAPI endpoints
+            if all_fastapi_endpoints:
+                logger.info(f"Processing {len(all_fastapi_endpoints)} FastAPI endpoints...")
+                
+                # Create Endpoint objects and link to handler symbols
+                endpoints = []
+                handler_to_endpoint_id = {}  # Map handler names to endpoint IDs
+                
+                for ep_data in all_fastapi_endpoints:
+                    # Find handler symbol ID
+                    handler_name = ep_data["handler_function"]
+                    symbol_id = symbol_by_name.get(handler_name)
+                    
+                    endpoint = Endpoint(
+                        snapshot_id=ep_data["snapshot_id"],
+                        file_id=ep_data["file_id"],
+                        symbol_id=symbol_id,
+                        http_method=ep_data["http_method"],
+                        path=ep_data["path"],
+                        router_prefix=ep_data.get("router_prefix"),
+                        tags=ep_data.get("tags", []),
+                        summary=ep_data.get("summary"),
+                        description=ep_data.get("description"),
+                        response_model=ep_data.get("response_model"),
+                        status_code=ep_data.get("status_code", 200),
+                        deprecated=ep_data.get("deprecated", False)
+                    )
+                    endpoints.append(endpoint)
+                    handler_to_endpoint_id[handler_name] = endpoint.endpoint_id
+                
+                EndpointDAO.batch_create_endpoints(endpoints)
+            
+            # Process dependencies
+            if all_fastapi_dependencies:
+                logger.info(f"Processing {len(all_fastapi_dependencies)} dependencies...")
+                
+                dependencies = []
+                for dep_data in all_fastapi_dependencies:
+                    # Find endpoint ID for this dependency
+                    handler_name = dep_data.get("endpoint_handler")
+                    endpoint_id = handler_to_endpoint_id.get(handler_name) if handler_name else None
+                    
+                    dependency = Dependency(
+                        snapshot_id=dep_data["snapshot_id"],
+                        endpoint_id=endpoint_id,
+                        parameter_name=dep_data["parameter_name"],
+                        dependency_function=dep_data["dependency_function"],
+                        scope=dep_data["scope"]
+                    )
+                    dependencies.append(dependency)
+                
+                DependencyDAO.batch_create_dependencies(dependencies)
+            
+            # Process model usages
+            if all_fastapi_model_usages:
+                logger.info(f"Processing {len(all_fastapi_model_usages)} model usages...")
+                
+                model_usages = []
+                for usage_data in all_fastapi_model_usages:
+                    # Find endpoint ID for this model usage
+                    handler_name = usage_data.get("endpoint_handler")
+                    endpoint_id = handler_to_endpoint_id.get(handler_name) if handler_name else None
+                    
+                    usage = ModelUsage(
+                        snapshot_id=usage_data["snapshot_id"],
+                        endpoint_id=endpoint_id,
+                        model_name=usage_data["model_name"],
+                        usage_type=usage_data["usage_type"],
+                        is_list=usage_data.get("is_list", False)
+                    )
+                    model_usages.append(usage)
+                
+                ModelUsageDAO.batch_track_usages(model_usages)
             
             # Process imports and build import graph
             if all_imports_data:
@@ -240,6 +337,13 @@ class RepositoryIngestor:
                 if import_edges:
                     logger.info(f"Creating {len(import_edges)} import relationships...")
                     ImportDAO.batch_create_import_edges(import_edges)
+            
+            
+            # Update snapshot with lang_profile
+            SnapshotDAO.update_snapshot_lang_profile(
+                snapshot.snapshot_id,
+                snapshot.lang_profile
+            )
             
             # Update snapshot status
             SnapshotDAO.update_snapshot_status(

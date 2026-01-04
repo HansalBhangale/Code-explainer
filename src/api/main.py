@@ -385,6 +385,135 @@ async def get_file_dependencies(snapshot_id: str, file_path: str):
         )
 
 
+# ============================================================================
+# FastAPI Intelligence Endpoints
+# ============================================================================
+
+@app.get("/api/v1/snapshots/{snapshot_id}/endpoints")
+async def list_endpoints(snapshot_id: str):
+    """Get all FastAPI endpoints in a snapshot
+    
+    Args:
+        snapshot_id: Snapshot ID
+        
+    Returns:
+        List of endpoints with metadata
+    """
+    try:
+        from src.database.repository import EndpointDAO
+        endpoints = EndpointDAO.get_endpoints_by_snapshot(snapshot_id)
+        return {
+            "snapshot_id": snapshot_id,
+            "endpoints": endpoints,
+            "count": len(endpoints)
+        }
+    except Exception as e:
+        logger.error(f"Failed to list endpoints: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.get("/api/v1/endpoints/{endpoint_id}/dependencies")
+async def get_endpoint_dependencies(endpoint_id: str):
+    """Get dependency chain for an endpoint
+    
+    Args:
+        endpoint_id: Endpoint ID
+        
+    Returns:
+        List of dependencies
+    """
+    try:
+        from src.database.repository import DependencyDAO
+        dependencies = DependencyDAO.get_endpoint_dependencies(endpoint_id)
+        return {
+            "endpoint_id": endpoint_id,
+            "dependencies": dependencies,
+            "count": len(dependencies)
+        }
+    except Exception as e:
+        logger.error(f"Failed to get endpoint dependencies: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.get("/api/v1/endpoints/{endpoint_id}/models")
+async def get_endpoint_models(endpoint_id: str):
+    """Get Pydantic models used by an endpoint
+    
+    Args:
+        endpoint_id: Endpoint ID
+        
+    Returns:
+        List of model usages
+    """
+    try:
+        from src.database.repository import ModelUsageDAO
+        models = ModelUsageDAO.get_models_for_endpoint(endpoint_id)
+        return {
+            "endpoint_id": endpoint_id,
+            "models": models,
+            "count": len(models)
+        }
+    except Exception as e:
+        logger.error(f"Failed to get endpoint models: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.get("/api/v1/snapshots/{snapshot_id}/api-surface")
+async def get_api_surface_map(snapshot_id: str):
+    """Get complete API surface map
+    
+    Args:
+        snapshot_id: Snapshot ID
+        
+    Returns:
+        Complete API surface with endpoints grouped by tags
+    """
+    try:
+        from src.database.repository import EndpointDAO
+        endpoints = EndpointDAO.get_endpoints_by_snapshot(snapshot_id)
+        
+        # Group by tags
+        by_tags = {}
+        for ep in endpoints:
+            tags = ep.get("tags", "[]")
+            # Parse JSON string
+            import json
+            tag_list = json.loads(tags) if isinstance(tags, str) else tags
+            
+            for tag in tag_list:
+                if tag not in by_tags:
+                    by_tags[tag] = []
+                by_tags[tag].append(ep)
+            
+            # Add to "untagged" if no tags
+            if not tag_list:
+                if "untagged" not in by_tags:
+                    by_tags["untagged"] = []
+                by_tags["untagged"].append(ep)
+        
+        return {
+            "snapshot_id": snapshot_id,
+            "total_endpoints": len(endpoints),
+            "by_tags": by_tags,
+            "endpoints": endpoints
+        }
+    except Exception as e:
+        logger.error(f"Failed to get API surface map: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(

@@ -119,11 +119,36 @@ class Endpoint(BaseModel):
     endpoint_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     snapshot_id: str
     file_id: str
-    symbol_id: Optional[str] = None
-    http_method: str  # GET, POST, etc.
+    symbol_id: Optional[str] = None  # Handler function symbol ID
+    http_method: str  # GET, POST, PUT, DELETE, PATCH
     path: str  # /api/users/{id}
     router_prefix: Optional[str] = None
     tags: List[str] = Field(default_factory=list)
+    summary: Optional[str] = None
+    description: Optional[str] = None
+    response_model: Optional[str] = None  # Pydantic model name
+    status_code: int = 200
+    deprecated: bool = False
+
+
+class Dependency(BaseModel):
+    """FastAPI dependency injection"""
+    dependency_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    snapshot_id: str
+    endpoint_id: Optional[str] = None  # If endpoint-specific
+    parameter_name: str  # Function parameter name
+    dependency_function: str  # Name of dependency function
+    scope: str  # "database", "auth", "query", "header", "dependency"
+
+
+class ModelUsage(BaseModel):
+    """Pydantic model usage in endpoint"""
+    usage_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    snapshot_id: str
+    endpoint_id: Optional[str] = None
+    model_name: str  # Pydantic model class name
+    usage_type: str  # "request_body", "response", "query_params"
+    is_list: bool = False
 
 
 class Edge(BaseModel):

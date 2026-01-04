@@ -163,6 +163,24 @@ class SnapshotDAO:
         logger.info(f"Updated snapshot {snapshot_id} status to {status.value}")
     
     @staticmethod
+    def update_snapshot_lang_profile(snapshot_id: str, lang_profile: Dict[str, int]) -> None:
+        """Update snapshot language profile
+        
+        Args:
+            snapshot_id: Snapshot ID
+            lang_profile: Language profile dictionary
+        """
+        query = """
+        MATCH (s:Snapshot {snapshot_id: $snapshot_id})
+        SET s.lang_profile = $lang_profile
+        """
+        db.execute_write(query, {
+            "snapshot_id": snapshot_id,
+            "lang_profile": json.dumps(lang_profile)
+        })
+        logger.info(f"Updated snapshot {snapshot_id} lang_profile")
+    
+    @staticmethod
     def get_snapshot(snapshot_id: str) -> Optional[Snapshot]:
         """Get snapshot by ID
         
@@ -552,4 +570,252 @@ class ImportDAO:
             "snapshot_id": snapshot_id,
             "file_path": file_path
         })
+
+
+class EndpointDAO:
+    """Data Access Object for Endpoint operations"""
+    
+    @staticmethod
+    def batch_create_endpoints(endpoints: List) -> None:
+        """Batch create endpoint nodes
+        
+        Args:
+            endpoints: List of Endpoint instances
+        """
+        if not endpoints:
+            return
+        
+        from src.models import Endpoint
+        
+        query = """
+        UNWIND $endpoints AS ep_data
+        MATCH (f:File {file_id: ep_data.file_id})
+        CREATE (e:Endpoint {
+            endpoint_id: ep_data.endpoint_id,
+            snapshot_id: ep_data.snapshot_id,
+            file_id: ep_data.file_id,
+            symbol_id: ep_data.symbol_id,
+            http_method: ep_data.http_method,
+            path: ep_data.path,
+            router_prefix: ep_data.router_prefix,
+            tags: ep_data.tags,
+            summary: ep_data.summary,
+            description: ep_data.description,
+            response_model: ep_data.response_model,
+            status_code: ep_data.status_code,
+            deprecated: ep_data.deprecated
+        })
+        CREATE (f)-[:DEFINES_ENDPOINT]->(e)
+        WITH e, ep_data
+        WHERE ep_data.symbol_id IS NOT NULL
+        MATCH (s:Symbol {symbol_id: ep_data.symbol_id})
+        CREATE (e)-[:HANDLED_BY]->(s)
+        """
+        
+        endpoints_data = [
+            {
+                "endpoint_id": e.endpoint_id,
+                "snapshot_id": e.snapshot_id,
+                "file_id": e.file_id,
+                "symbol_id": e.symbol_id,
+                "http_method": e.http_method,
+                "path": e.path,
+                "router_prefix": e.router_prefix,
+                "tags": json.dumps(e.tags),
+                "summary": e.summary,
+                "description": e.description,
+                "response_model": e.response_model,
+                "status_code": e.status_code,
+                "deprecated": e.deprecated
+            }
+            for e in endpoints
+        ]
+        
+        db.execute_write(query, {"endpoints": endpoints_data})
+        logger.info(f"Batch created {len(endpoints)} endpoints")
+    
+    @staticmethod
+    def link_endpoint_to_handler(endpoint_id: str, symbol_id: str) -> None:
+        """Link endpoint to handler function symbol
+        
+        Args:
+            endpoint_id: Endpoint ID
+            symbol_id: Symbol ID of handler function
+        """
+        query = """
+        MATCH (e:Endpoint {endpoint_id: $endpoint_id})
+        MATCH (s:Symbol {symbol_id: $symbol_id})
+        MERGE (e)-[:HANDLED_BY]->(s)
+        """
+        
+        db.execute_write(query, {
+            "endpoint_id": endpoint_id,
+            "symbol_id": symbol_id
+        })
+    
+    @staticmethod
+    def get_endpoints_by_snapshot(snapshot_id: str) -> List[Dict[str, Any]]:
+        """Get all endpoints in a snapshot
+        
+        Args:
+            snapshot_id: Snapshot ID
+            
+        Returns:
+            List of endpoint dictionaries
+        """
+        query = """
+        MATCH (e:Endpoint)
+        WHERE e.snapshot_id = $snapshot_id
+        RETURN e.endpoint_id as endpoint_id, e.http_method as http_method, 
+               e.path as path, e.summary as summary, e.tags as tags
+        ORDER BY e.path
+        """
+        return db.execute_query(query, {"snapshot_id": snapshot_id})
+
+
+class DependencyDAO:
+    """Data Access Object for Dependency operations"""
+    
+    @staticmethod
+    def batch_create_dependencies(dependencies: List) -> None:
+        """Batch create dependency nodes
+        
+        Args:
+            dependencies: List of Dependency instances
+        """
+        if not dependencies:
+            return
+        
+        from src.models import Dependency
+        
+        query = """
+        UNWIND $dependencies AS dep_data
+        CREATE (d:Dependency {
+            dependency_id: dep_data.dependency_id,
+            snapshot_id: dep_data.snapshot_id,
+            endpoint_id: dep_data.endpoint_id,
+            parameter_name: dep_data.parameter_name,
+            dependency_function: dep_data.dependency_function,
+            scope: dep_data.scope
+        })
+        WITH d, dep_data
+        WHERE dep_data.endpoint_id IS NOT NULL
+        MATCH (e:Endpoint {endpoint_id: dep_data.endpoint_id})
+        CREATE (e)-[:DEPENDS_ON]->(d)
+        """
+        
+        dependencies_data = [
+            {
+                "dependency_id": d.dependency_id,
+                "snapshot_id": d.snapshot_id,
+                "endpoint_id": d.endpoint_id,
+                "parameter_name": d.parameter_name,
+                "dependency_function": d.dependency_function,
+                "scope": d.scope
+            }
+            for d in dependencies
+        ]
+        
+        db.execute_write(query, {"dependencies": dependencies_data})
+        logger.info(f"Batch created {len(dependencies)} dependencies")
+    
+    @staticmethod
+    def link_dependency_to_endpoint(dependency_id: str, endpoint_id: str) -> None:
+        """Link dependency to endpoint
+        
+        Args:
+            dependency_id: Dependency ID
+            endpoint_id: Endpoint ID
+        """
+        query = """
+        MATCH (d:Dependency {dependency_id: $dependency_id})
+        MATCH (e:Endpoint {endpoint_id: $endpoint_id})
+        MERGE (e)-[:DEPENDS_ON]->(d)
+        """
+        
+        db.execute_write(query, {
+            "dependency_id": dependency_id,
+            "endpoint_id": endpoint_id
+        })
+    
+    @staticmethod
+    def get_endpoint_dependencies(endpoint_id: str) -> List[Dict[str, Any]]:
+        """Get all dependencies for an endpoint
+        
+        Args:
+            endpoint_id: Endpoint ID
+            
+        Returns:
+            List of dependency dictionaries
+        """
+        query = """
+        MATCH (e:Endpoint {endpoint_id: $endpoint_id})-[:DEPENDS_ON]->(d:Dependency)
+        RETURN d.dependency_id as dependency_id, d.parameter_name as parameter_name,
+               d.dependency_function as dependency_function, d.scope as scope
+        """
+        return db.execute_query(query, {"endpoint_id": endpoint_id})
+
+
+class ModelUsageDAO:
+    """Data Access Object for ModelUsage operations"""
+    
+    @staticmethod
+    def batch_track_usages(usages: List) -> None:
+        """Batch track model usages
+        
+        Args:
+            usages: List of ModelUsage instances
+        """
+        if not usages:
+            return
+        
+        from src.models import ModelUsage
+        
+        query = """
+        UNWIND $usages AS usage_data
+        CREATE (m:ModelUsage {
+            usage_id: usage_data.usage_id,
+            snapshot_id: usage_data.snapshot_id,
+            endpoint_id: usage_data.endpoint_id,
+            model_name: usage_data.model_name,
+            usage_type: usage_data.usage_type,
+            is_list: usage_data.is_list
+        })
+        WITH m, usage_data
+        WHERE usage_data.endpoint_id IS NOT NULL
+        MATCH (e:Endpoint {endpoint_id: usage_data.endpoint_id})
+        CREATE (e)-[:USES_MODEL]->(m)
+        """
+        
+        usages_data = [
+            {
+                "usage_id": u.usage_id,
+                "snapshot_id": u.snapshot_id,
+                "endpoint_id": u.endpoint_id,
+                "model_name": u.model_name,
+                "usage_type": u.usage_type,
+                "is_list": u.is_list
+            }
+            for u in usages
+        ]
+        
+        db.execute_write(query, {"usages": usages_data})
+        logger.info(f"Batch tracked {len(usages)} model usages")
+    
+    @staticmethod
+    def get_models_for_endpoint(endpoint_id: str) -> List[Dict[str, Any]]:
+        """Get all model usages for an endpoint
+        
+        Args:
+            endpoint_id: Endpoint ID
+            
+        Returns:
+            List of model usage dictionaries
+        """
+        query = """
+        MATCH (m:ModelUsage)
+        WHERE m.endpoint_id = $endpoint_id
+        RETURN m.model_name as model_name, m.usage_type as usage_type, m.is_list as is_list
+        """
+        return db.execute_query(query, {"endpoint_id": endpoint_id})
 
