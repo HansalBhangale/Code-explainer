@@ -17,6 +17,8 @@ from src.services.file_scanner import FileScanner
 from src.services.import_resolver import ImportResolver
 from src.parsers.python_parser import PythonASTParser
 from src.parsers.fastapi_parser import FastAPIParser
+from src.parsers.javascript_parser import JavaScriptParser
+from src.parsers.javascript_framework_detector import JavaScriptFrameworkDetector
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +31,8 @@ class RepositoryIngestor:
         self.file_scanner = FileScanner()
         self.python_parser = PythonASTParser()
         self.fastapi_parser = FastAPIParser()
+        self.javascript_parser = JavaScriptParser()
+        self.js_framework_detector = JavaScriptFrameworkDetector()
     
     def ingest_git_repository(
         self,
@@ -188,6 +192,43 @@ class RepositoryIngestor:
                         all_fastapi_endpoints.extend(fastapi_data["endpoints"])
                         all_fastapi_dependencies.extend(fastapi_data["dependencies"])
                         all_fastapi_model_usages.extend(fastapi_data["model_usages"])
+                    
+                    # Parse JavaScript/TypeScript files
+                    elif language in ("javascript", "typescript"):
+                        symbols, imports = self.javascript_parser.parse_file(
+                            file_path,
+                            file.file_id,
+                            snapshot.snapshot_id
+                        )
+                        all_symbols.extend(symbols)
+                        
+                        # Build symbol name mapping
+                        for symbol in symbols:
+                            symbol_by_name[symbol.name] = symbol.symbol_id
+                        
+                        # Imports already have file_id set during construction
+                        all_imports_data.extend(imports)
+                        
+                        # Detect JavaScript framework constructs (only if parser is initialized)
+                        if self.javascript_parser._parser:
+                            try:
+                                # Re-parse for framework detection
+                                with open(file_path, "r", encoding="utf-8") as f:
+                                    source = f.read()
+                                tree = self.javascript_parser._parser.parse(bytes(source, "utf8"))
+                                
+                                framework_data = self.js_framework_detector.detect_frameworks(
+                                    tree.root_node,
+                                    source,
+                                    file_path,
+                                    file.file_id,
+                                    snapshot.snapshot_id
+                                )
+                                all_fastapi_endpoints.extend(framework_data["endpoints"])
+                            except Exception as e:
+                                logger.warning(f"Failed to detect frameworks in {file_path}: {e}")
+                        else:
+                            logger.debug(f"JavaScript parser not initialized, skipping framework detection for {file_path}")
             
             # Process large files (index without parsing)
             if large_files:
@@ -302,31 +343,50 @@ class RepositoryIngestor:
                 import_edges = []
                 
                 for imp_data in all_imports_data:
-                    # Create Import object
-                    import_obj = Import(
-                        snapshot_id=snapshot.snapshot_id,
-                        file_id=imp_data['file_id'],
-                        module=imp_data['module'],
-                        imported_names=imp_data['imported_names'],
-                        alias=imp_data['alias'],
-                        is_relative=imp_data['is_relative'],
-                        line_number=imp_data['line_number']
-                    )
+                    # Check if imp_data is already an Import object or a dictionary
+                    if isinstance(imp_data, Import):
+                        # Already an Import object (from JavaScript parser)
+                        import_obj = imp_data
+                        file_id = imp_data.file_id
+                        module = imp_data.module
+                        is_relative = imp_data.is_relative
+                        # Get file_path from file_id
+                        file_path = None
+                        for path, fid in file_path_to_id.items():
+                            if fid == file_id:
+                                file_path = path
+                                break
+                    else:
+                        # Dictionary (from Python parser)
+                        import_obj = Import(
+                            snapshot_id=snapshot.snapshot_id,
+                            file_id=imp_data['file_id'],
+                            module=imp_data['module'],
+                            imported_names=imp_data['imported_names'],
+                            alias=imp_data['alias'],
+                            is_relative=imp_data['is_relative'],
+                            line_number=imp_data['line_number']
+                        )
+                        file_id = imp_data['file_id']
+                        module = imp_data['module']
+                        is_relative = imp_data['is_relative']
+                        file_path = imp_data['file_path']
+                    
                     all_imports.append(import_obj)
                     
                     # Resolve import to file ID
                     target_file_id = resolver.resolve_import(
-                        imp_data['module'],
-                        imp_data['file_path'],
-                        imp_data['is_relative']
+                        module,
+                        file_path,
+                        is_relative
                     )
                     
                     # Create edge if target is internal
                     if target_file_id:
                         import_edges.append({
-                            'src_file_id': imp_data['file_id'],
+                            'src_file_id': file_id,
                             'dst_file_id': target_file_id,
-                            'module': imp_data['module'],
+                            'module': module,
                             'line_number': imp_data['line_number']
                         })
                 

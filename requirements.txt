@@ -36,3 +36,9 @@ pytest-cov
 black
 ruff
 mypy
+
+
+tree-sitter
+tree-sitter-javascript
+tree-sitter-javascript
+tree-sitter-typescript
