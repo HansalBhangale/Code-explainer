@@ -314,3 +314,139 @@ class PythonASTParser:
                 })
         
         return imports
+    
+    def extract_call_sites(self, tree: ast.AST, symbols: List[Symbol]) -> List:
+        """Extract function/method calls from AST
+        
+        Args:
+            tree: Python AST
+            symbols: List of symbols to map callers
+            
+        Returns:
+            List of CallSite objects
+        """
+        from src.models import CallSite, CallType
+        
+        call_sites = []
+        symbol_map = {s.qualname: s.symbol_id for s in symbols}
+        
+        class CallVisitor(ast.NodeVisitor):
+            def __init__(self, parser):
+                self.parser = parser
+                self.current_function = None
+            
+            def visit_FunctionDef(self, node):
+                # Track current function context
+                old_func = self.current_function
+                qualname = self.parser._get_qualname(node.name)
+                self.current_function = symbol_map.get(qualname)
+                self.generic_visit(node)
+                self.current_function = old_func
+            
+            def visit_AsyncFunctionDef(self, node):
+                self.visit_FunctionDef(node)
+            
+            def visit_Call(self, node):
+                if self.current_function:
+                    # Extract callee name
+                    callee_name = None
+                    call_type = CallType.DIRECT
+                    
+                    if isinstance(node.func, ast.Name):
+                        callee_name = node.func.id
+                    elif isinstance(node.func, ast.Attribute):
+                        callee_name = node.func.attr
+                        call_type = CallType.METHOD
+                    
+                    if callee_name:
+                        call_sites.append(CallSite(
+                            snapshot_id=self.parser.current_snapshot_id,
+                            caller_symbol_id=self.current_function,
+                            callee_name=callee_name,
+                            line_number=node.lineno,
+                            call_type=call_type
+                        ))
+                
+                self.generic_visit(node)
+        
+        visitor = CallVisitor(self)
+        visitor.visit(tree)
+        return call_sites
+    
+    def extract_type_annotations(self, tree: ast.AST, symbols: List[Symbol]) -> List:
+        """Extract type annotations from function signatures and variables
+        
+        Args:
+            tree: Python AST
+            symbols: List of symbols to attach types to
+            
+        Returns:
+            List of TypeAnnotation objects
+        """
+        from src.models import TypeAnnotation, TypeCategory
+        
+        type_annotations = []
+        symbol_map = {s.qualname: s.symbol_id for s in symbols}
+        
+        class TypeVisitor(ast.NodeVisitor):
+            def __init__(self, parser):
+                self.parser = parser
+            
+            def visit_FunctionDef(self, node):
+                qualname = self.parser._get_qualname(node.name)
+                symbol_id = symbol_map.get(qualname)
+                
+                if symbol_id and node.returns:
+                    # Extract return type
+                    type_name, category = self._parse_annotation(node.returns)
+                    if type_name:
+                        type_annotations.append(TypeAnnotation(
+                            snapshot_id=self.parser.current_snapshot_id,
+                            symbol_id=symbol_id,
+                            type_name=type_name,
+                            type_category=category
+                        ))
+                
+                # Extract parameter types
+                for arg in node.args.args:
+                    if arg.annotation:
+                        type_name, category = self._parse_annotation(arg.annotation)
+                        # Note: parameter types could be stored separately if needed
+                
+                self.generic_visit(node)
+            
+            def visit_AsyncFunctionDef(self, node):
+                self.visit_FunctionDef(node)
+            
+            def _parse_annotation(self, annotation) -> tuple[str, TypeCategory]:
+                """Parse type annotation node"""
+                if isinstance(annotation, ast.Name):
+                    type_name = annotation.id
+                    category = self._categorize_type(type_name)
+                    return type_name, category
+                elif isinstance(annotation, ast.Subscript):
+                    # Generic types like List[str], Optional[int]
+                    if isinstance(annotation.value, ast.Name):
+                        base = annotation.value.id
+                        return f"{base}[...]", TypeCategory.GENERIC
+                elif isinstance(annotation, ast.BinOp) and isinstance(annotation.op, ast.BitOr):
+                    # Union types (Python 3.10+): str | int
+                    return "Union", TypeCategory.UNION
+                
+                return "Any", TypeCategory.ANY
+            
+            def _categorize_type(self, type_name: str) -> TypeCategory:
+                """Categorize a type name"""
+                primitives = {'int', 'str', 'float', 'bool', 'bytes', 'None'}
+                if type_name in primitives:
+                    return TypeCategory.PRIMITIVE
+                elif type_name in {'List', 'Dict', 'Set', 'Tuple', 'Optional'}:
+                    return TypeCategory.GENERIC
+                elif type_name == 'Callable':
+                    return TypeCategory.FUNCTION
+                else:
+                    return TypeCategory.CLASS
+        
+        visitor = TypeVisitor(self)
+        visitor.visit(tree)
+        return type_annotations

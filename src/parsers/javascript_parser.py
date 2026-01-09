@@ -286,6 +286,142 @@ class JavaScriptParser:
         visit_node(root)
         return imports
     
+    def extract_call_sites(self, root: Node, source: str, symbols: List) -> List:
+        """Extract function/method calls from tree-sitter AST
+        
+        Args:
+            root: Tree-sitter root node
+            source: Source code
+            symbols: List of Symbol objects
+            
+        Returns:
+            List of CallSite objects
+        """
+        from src.models import CallSite, CallType
+        
+        call_sites = []
+        symbol_map = {s.qualname: s.symbol_id for s in symbols}
+        
+        def visit_node(node: Node, current_function: Optional[str] = None):
+            """Recursively visit nodes to extract calls"""
+            
+            # Track function context
+            if node.type in ("function_declaration", "method_definition"):
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    func_name = source[name_node.start_byte:name_node.end_byte]
+                    current_function = symbol_map.get(func_name)
+            
+            # Extract call expressions
+            if node.type == "call_expression" and current_function:
+                func_node = node.child_by_field_name("function")
+                if func_node:
+                    callee_name = None
+                    call_type = CallType.DIRECT
+                    
+                    if func_node.type == "identifier":
+                        callee_name = source[func_node.start_byte:func_node.end_byte]
+                    elif func_node.type == "member_expression":
+                        # Method call: obj.method()
+                        prop_node = func_node.child_by_field_name("property")
+                        if prop_node:
+                            callee_name = source[prop_node.start_byte:prop_node.end_byte]
+                            call_type = CallType.METHOD
+                    
+                    if callee_name:
+                        call_sites.append(CallSite(
+                            snapshot_id=self.current_snapshot_id,
+                            caller_symbol_id=current_function,
+                            callee_name=callee_name,
+                            line_number=node.start_point[0] + 1,
+                            call_type=call_type
+                        ))
+            
+            # Recurse
+            for child in node.children:
+                visit_node(child, current_function)
+        
+        visit_node(root)
+        return call_sites
+    
+    def extract_type_annotations(self, root: Node, source: str, symbols: List) -> List:
+        """Extract TypeScript type annotations
+        
+        Args:
+            root: Tree-sitter root node
+            source: Source code
+            symbols: List of Symbol objects
+            
+        Returns:
+            List of TypeAnnotation objects
+        """
+        from src.models import TypeAnnotation, TypeCategory
+        
+        type_annotations = []
+        symbol_map = {s.qualname: s.symbol_id for s in symbols}
+        
+        def visit_node(node: Node):
+            """Recursively visit nodes to extract types"""
+            
+            # Function return types
+            if node.type in ("function_declaration", "method_definition"):
+                name_node = node.child_by_field_name("name")
+                return_type_node = node.child_by_field_name("return_type")
+                
+                if name_node and return_type_node:
+                    func_name = source[name_node.start_byte:name_node.end_byte]
+                    symbol_id = symbol_map.get(func_name)
+                    
+                    if symbol_id:
+                        type_name, category = self._parse_ts_type(return_type_node, source)
+                        if type_name:
+                            type_annotations.append(TypeAnnotation(
+                                snapshot_id=self.current_snapshot_id,
+                                symbol_id=symbol_id,
+                                type_name=type_name,
+                                type_category=category
+                            ))
+            
+            # Recurse
+            for child in node.children:
+                visit_node(child)
+        
+        visit_node(root)
+        return type_annotations
+    
+    def _parse_ts_type(self, type_node: Node, source: str) -> tuple[str, Any]:
+        """Parse TypeScript type annotation
+        
+        Returns:
+            Tuple of (type_name, TypeCategory)
+        """
+        from src.models import TypeCategory
+        
+        if not type_node:
+            return "any", TypeCategory.ANY
+        
+        type_text = source[type_node.start_byte:type_node.end_byte]
+        
+        # Remove leading colon if present
+        if type_text.startswith(':'):
+            type_text = type_text[1:].strip()
+        
+        # Categorize type
+        primitives = {'string', 'number', 'boolean', 'null', 'undefined', 'void'}
+        if type_text in primitives:
+            return type_text, TypeCategory.PRIMITIVE
+        elif type_text == 'any':
+            return type_text, TypeCategory.ANY
+        elif '[' in type_text or 'Array<' in type_text:
+            return type_text, TypeCategory.GENERIC
+        elif '|' in type_text:
+            return type_text, TypeCategory.UNION
+        elif type_text.startswith('(') and '=>' in type_text:
+            return type_text, TypeCategory.FUNCTION
+        else:
+            return type_text, TypeCategory.CLASS
+
+    
     def _get_function_signature(self, node: Node, source: str) -> str:
         """Extract function signature
         

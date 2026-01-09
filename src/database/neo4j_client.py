@@ -118,6 +118,8 @@ class Neo4jConnection:
             "CREATE CONSTRAINT metric_id IF NOT EXISTS FOR (m:Metric) REQUIRE m.metric_id IS UNIQUE",
             "CREATE CONSTRAINT diff_id IF NOT EXISTS FOR (d:Diff) REQUIRE d.diff_id IS UNIQUE",
             "CREATE CONSTRAINT impact_id IF NOT EXISTS FOR (i:ImpactResult) REQUIRE i.impact_id IS UNIQUE",
+            "CREATE CONSTRAINT call_id IF NOT EXISTS FOR (c:CallSite) REQUIRE c.call_id IS UNIQUE",
+            "CREATE CONSTRAINT type_id IF NOT EXISTS FOR (t:TypeAnnotation) REQUIRE t.type_id IS UNIQUE",
         ]
         
         for constraint in constraints:

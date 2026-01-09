@@ -55,6 +55,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Import and register routes
+from src.api.routes import call_graph, types as type_routes
+
+app.include_router(call_graph.router, prefix="/api/v1")
+app.include_router(type_routes.router, prefix="/api/v1")
+
+
 
 # ============================================================================
 # Request/Response Models

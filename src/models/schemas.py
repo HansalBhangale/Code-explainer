@@ -158,7 +158,52 @@ class Edge(BaseModel):
     src_symbol_id: str
     dst_symbol_id: str
     edge_type: EdgeType
+    impact_score: float = 0.0
     confidence: float = 1.0
+    meta: Dict[str, Any] = Field(default_factory=dict)
+
+
+class CallType(str, Enum):
+    """Function call types"""
+    DIRECT = "direct"           # foo()
+    METHOD = "method"           # obj.foo()
+    CONSTRUCTOR = "constructor" # new Foo() or Foo()
+
+
+class CallSite(BaseModel):
+    """Represents a function/method call in code"""
+    call_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    snapshot_id: str
+    caller_symbol_id: str  # Symbol making the call
+    callee_name: str       # Name of function being called
+    line_number: int
+    is_resolved: bool = False
+    call_type: CallType = CallType.DIRECT
+    meta: Dict[str, Any] = Field(default_factory=dict)
+
+
+class TypeCategory(str, Enum):
+    """Type annotation categories"""
+    PRIMITIVE = "primitive"     # int, str, number, boolean
+    CLASS = "class"             # User, MyClass
+    INTERFACE = "interface"     # TypeScript interfaces
+    UNION = "union"             # Union[str, int], string | number
+    GENERIC = "generic"         # List[T], Array<T>
+    FUNCTION = "function"       # Callable, Function
+    ANY = "any"                 # Any, any
+    UNKNOWN = "unknown"         # Unknown type
+
+
+class TypeAnnotation(BaseModel):
+    """Represents type information for symbols"""
+    type_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    snapshot_id: str
+    symbol_id: str
+    type_name: str
+    type_category: TypeCategory
+    is_optional: bool = False
+    is_array: bool = False
+    generic_params: List[str] = Field(default_factory=list)
     meta: Dict[str, Any] = Field(default_factory=dict)
 
 

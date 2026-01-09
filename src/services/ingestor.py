@@ -137,14 +137,17 @@ class RepositoryIngestor:
             
             # Process files by language
             all_files = []
-            all_symbols = []
-            all_imports_data = []  # Store raw import data
-            all_fastapi_endpoints = []  # Store FastAPI endpoints
-            all_fastapi_dependencies = []  # Store dependencies
-            all_fastapi_model_usages = []  # Store model usages
-            file_path_to_id = {}  # Map file paths to file IDs
-            symbol_by_name = {}  # Map function names to symbol IDs
+            all_symbols: List[Symbol] = []
+            all_imports_data: List[Any] = []
+            all_call_sites: List = []
+            all_type_annotations: List = []
+            all_fastapi_endpoints: List[Dict[str, Any]] = []
+            all_fastapi_dependencies: List[Dict[str, Any]] = []
+            all_fastapi_model_usages: List[Dict[str, Any]] = []
+            symbol_by_name: Dict[str, str] = {}  # symbol name -> symbol_id
+            file_path_to_id: Dict[str, str] = {}  # file path -> file_id
             
+            # Process each language group
             for language, file_paths in files_by_language.items():
                 logger.info(f"Processing {len(file_paths)} {language} files...")
                 
@@ -183,6 +186,20 @@ class RepositoryIngestor:
                             imp_data['file_path'] = str(relative_path)
                         all_imports_data.extend(imports)
                         
+                        # Extract call sites and type annotations
+                        try:
+                            with open(file_path, "r", encoding="utf-8") as f:
+                                source = f.read()
+                            tree = __import__('ast').parse(source, filename=str(file_path))
+                            
+                            call_sites = self.python_parser.extract_call_sites(tree, symbols)
+                            all_call_sites.extend(call_sites)
+                            
+                            type_annotations = self.python_parser.extract_type_annotations(tree, symbols)
+                            all_type_annotations.extend(type_annotations)
+                        except Exception as e:
+                            logger.warning(f"Failed to extract calls/types from {file_path.name}: {e}")
+                        
                         # Parse FastAPI constructs
                         fastapi_data = self.fastapi_parser.parse_file(
                             file_path,
@@ -208,6 +225,20 @@ class RepositoryIngestor:
                         
                         # Imports already have file_id set during construction
                         all_imports_data.extend(imports)
+                        
+                        # Extract call sites and type annotations
+                        try:
+                            with open(file_path, "r", encoding="utf-8") as f:
+                                source = f.read()
+                            tree = self.javascript_parser._parser.parse(bytes(source, "utf8"))
+                            
+                            call_sites = self.javascript_parser.extract_call_sites(tree.root_node, source, symbols)
+                            all_call_sites.extend(call_sites)
+                            
+                            type_annotations = self.javascript_parser.extract_type_annotations(tree.root_node, source, symbols)
+                            all_type_annotations.extend(type_annotations)
+                        except Exception as e:
+                            logger.warning(f"Failed to extract calls/types from {file_path.name}: {e}")
                         
                         # Detect JavaScript framework constructs (only if parser is initialized)
                         if self.javascript_parser._parser:
@@ -256,6 +287,20 @@ class RepositoryIngestor:
             if all_symbols:
                 logger.info(f"Persisting {len(all_symbols)} symbols to database...")
                 SymbolDAO.batch_create_symbols(all_symbols)
+            
+            # Batch insert call sites
+            if all_call_sites:
+                logger.info(f"Persisting {len(all_call_sites)} call sites to database...")
+                from src.database.call_graph_dao import CallGraphDAO
+                CallGraphDAO.batch_create_call_sites(all_call_sites)
+                # Resolve call sites to actual symbols
+                CallGraphDAO.resolve_call_sites(snapshot.snapshot_id)
+            
+            # Batch insert type annotations
+            if all_type_annotations:
+                logger.info(f"Persisting {len(all_type_annotations)} type annotations to database...")
+                from src.database.type_dao import TypeDAO
+                TypeDAO.batch_create_types(all_type_annotations)
             
             # Process FastAPI endpoints
             if all_fastapi_endpoints:
