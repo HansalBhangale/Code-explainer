@@ -1,6 +1,7 @@
 """
 Models package initialization
 """
+
 from src.models.schemas import (
     SourceType,
     SnapshotStatus,
