@@ -56,10 +56,12 @@ app.add_middleware(
 )
 
 # Import and register routes
-from src.api.routes import call_graph, types as type_routes
+from src.api.routes import call_graph, types as type_routes, rag, chat
 
 app.include_router(call_graph.router, prefix="/api/v1")
 app.include_router(type_routes.router, prefix="/api/v1")
+app.include_router(rag.router)  # RAG routes already have /api/v1/rag prefix
+app.include_router(chat.router)  # Chat routes have /api/v1/chat prefix
 
 
 

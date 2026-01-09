@@ -19,6 +19,11 @@ from src.parsers.python_parser import PythonASTParser
 from src.parsers.fastapi_parser import FastAPIParser
 from src.parsers.javascript_parser import JavaScriptParser
 from src.parsers.javascript_framework_detector import JavaScriptFrameworkDetector
+from src.services.chunker import CodeChunker
+from src.services.embedder import GeminiEmbedder
+from src.database.chunk_dao import ChunkDAO
+from src.database.call_graph_dao import CallGraphDAO
+from src.database.type_dao import TypeDAO
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +38,16 @@ class RepositoryIngestor:
         self.fastapi_parser = FastAPIParser()
         self.javascript_parser = JavaScriptParser()
         self.js_framework_detector = JavaScriptFrameworkDetector()
+        self.chunker = CodeChunker(context_lines=10)
+        
+        # Initialize embedder (optional - may fail if API key not set)
+        try:
+            self.embedder = GeminiEmbedder()
+            logger.info("✅ Gemini embedder initialized successfully")
+        except Exception as e:
+            logger.warning(f"⚠️  Gemini embedder initialization failed: {e}")
+            logger.warning("Chunking will be disabled for this ingestion")
+            self.embedder = None
     
     def ingest_git_repository(
         self,
@@ -299,8 +314,76 @@ class RepositoryIngestor:
             # Batch insert type annotations
             if all_type_annotations:
                 logger.info(f"Persisting {len(all_type_annotations)} type annotations to database...")
-                from src.database.type_dao import TypeDAO
                 TypeDAO.batch_create_types(all_type_annotations)
+            
+            # Generate chunks and embeddings
+            if all_symbols and self.embedder is not None:
+                logger.info(f"Generating chunks for {len(all_symbols)} symbols...")
+                all_chunks = []
+                file_contents_cache = {}  # Cache file contents to avoid re-reading
+                
+                for symbol in all_symbols:
+                    try:
+                        # Get file content (with caching)
+                        if symbol.file_id not in file_contents_cache:
+                            # Find the file path from all_files
+                            file_obj = next((f for f in all_files if f.file_id == symbol.file_id), None)
+                            if file_obj:
+                                file_full_path = repo_path / file_obj.path
+                                if file_full_path.exists():
+                                    with open(file_full_path, 'r', encoding='utf-8', errors='ignore') as f:
+                                        file_contents_cache[symbol.file_id] = f.read()
+                                else:
+                                    logger.warning(f"File not found: {file_full_path}")
+                                    continue
+                            else:
+                                logger.warning(f"File object not found for file_id: {symbol.file_id}")
+                                continue
+                        
+                        file_content = file_contents_cache[symbol.file_id]
+                        
+                        # Get language from file object
+                        file_obj = next((f for f in all_files if f.file_id == symbol.file_id), None)
+                        language = file_obj.language if file_obj else "unknown"
+                        
+                        # Generate chunks
+                        child_chunk, parent_chunk = self.chunker.chunk_symbol(
+                            symbol,
+                            file_content,
+                            symbol.file_id,
+                            language
+                        )
+                        
+                        all_chunks.extend([child_chunk, parent_chunk])
+                        
+                    except Exception as e:
+                        logger.error(f"Error chunking symbol {symbol.name}: {e}")
+                        continue
+                
+                if all_chunks:
+                    logger.info(f"Generated {len(all_chunks)} chunks ({len(all_chunks)//2} parent-child pairs)")
+                    
+                    # Generate embeddings
+                    logger.info("Generating embeddings with Gemini...")
+                    chunk_contents = [chunk.content for chunk in all_chunks]
+                    
+                    try:
+                        embeddings = self.embedder.batch_generate_embeddings(chunk_contents)
+                        logger.info(f"Generated {len(embeddings)} embeddings")
+                        
+                        # Persist chunks with embeddings
+                        logger.info("Persisting chunks to Neo4j...")
+                        ChunkDAO.batch_create_chunks(all_chunks, embeddings)
+                        
+                        # Link parent-child relationships
+                        logger.info("Linking parent-child chunks...")
+                        ChunkDAO.link_parent_child_chunks(snapshot.snapshot_id)
+                        
+                        logger.info("✅ Chunking and embedding complete!")
+                        
+                    except Exception as e:
+                        logger.error(f"Error generating embeddings or persisting chunks: {e}")
+                        logger.warning("Continuing without chunks...")
             
             # Process FastAPI endpoints
             if all_fastapi_endpoints:

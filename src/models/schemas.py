@@ -44,12 +44,9 @@ class EdgeType(str, Enum):
 
 
 class ChunkType(str, Enum):
-    """RAG chunk types"""
-    FUNCTION_BODY = "function_body"
-    CLASS_BODY = "class_body"
-    DOCSTRING = "docstring"
-    COMMENT_BLOCK = "comment_block"
-    FILE_SUMMARY = "file_summary"
+    """RAG chunk types for parent-child chunking"""
+    CHILD = "child"  # Exact function/class body
+    PARENT = "parent"  # Surrounding context
 
 
 # ============================================================================
@@ -208,16 +205,19 @@ class TypeAnnotation(BaseModel):
 
 
 class Chunk(BaseModel):
-    """RAG chunk with embedding"""
+    """RAG chunk with embedding and parent-child relationships"""
     chunk_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     snapshot_id: str
     file_id: str
     symbol_id: Optional[str] = None
+    parent_chunk_id: Optional[str] = None  # For child chunks
     chunk_type: ChunkType
     content: str
+    language: str
     start_line: int
     end_line: int
     embedding: Optional[List[float]] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 class Finding(BaseModel):

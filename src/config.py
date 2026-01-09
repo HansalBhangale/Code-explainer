@@ -26,10 +26,10 @@ class Settings(BaseSettings):
     
     # Embedding Configuration
     embedding_model: str = Field(
-        default="sentence-transformers/all-MiniLM-L6-v2",
+        default="models/text-embedding-004",  # Gemini embedding model with models/ prefix
         env="EMBEDDING_MODEL"
     )
-    embedding_dimension: int = Field(default=384, env="EMBEDDING_DIMENSION")
+    embedding_dimension: int = Field(default=768, env="EMBEDDING_DIMENSION")  # Gemini dimension
     
     class Config:
         env_file = ".env"
