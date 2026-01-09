@@ -1,33 +1,33 @@
 """
 Repository Data Access Layer - Neo4j Operations
 """
+
 from typing import Optional, List, Dict, Any
 import logging
 import json
-from datetime import datetime
 
 from src.database import db
-from src.models import Repo, Snapshot, File, Symbol, Endpoint, SnapshotStatus, Import
+from src.models import Repo, Snapshot, File, Symbol, SnapshotStatus, Import
 
 logger = logging.getLogger(__name__)
 
 
 def convert_neo4j_types(data: Dict[str, Any]) -> Dict[str, Any]:
     """Convert Neo4j types to Python types for Pydantic compatibility
-    
+
     Args:
         data: Dictionary with Neo4j types
-        
+
     Returns:
         Dictionary with Python types
     """
     converted = {}
     for key, value in data.items():
         # Convert Neo4j DateTime to Python datetime
-        if hasattr(value, 'to_native'):
+        if hasattr(value, "to_native"):
             converted[key] = value.to_native()
         # Parse JSON strings back to dicts
-        elif key in ['lang_profile', 'meta'] and isinstance(value, str):
+        elif key in ["lang_profile", "meta"] and isinstance(value, str):
             try:
                 converted[key] = json.loads(value)
             except (json.JSONDecodeError, TypeError):
@@ -39,14 +39,14 @@ def convert_neo4j_types(data: Dict[str, Any]) -> Dict[str, Any]:
 
 class RepositoryDAO:
     """Data Access Object for Repository operations"""
-    
+
     @staticmethod
     def create_repo(repo: Repo) -> Repo:
         """Create a new repository node
-        
+
         Args:
             repo: Repo model instance
-            
+
         Returns:
             Created Repo instance
         """
@@ -65,20 +65,20 @@ class RepositoryDAO:
             "name": repo.name,
             "source_type": repo.source_type.value,
             "remote_url": repo.remote_url,
-            "created_at": repo.created_at.isoformat()
+            "created_at": repo.created_at.isoformat(),
         }
-        
-        result = db.execute_write(query, params)
+
+        db.execute_write(query, params)
         logger.info(f"Created repository: {repo.name} ({repo.repo_id})")
         return repo
-    
+
     @staticmethod
     def get_repo(repo_id: str) -> Optional[Repo]:
         """Get repository by ID
-        
+
         Args:
             repo_id: Repository ID
-            
+
         Returns:
             Repo instance or None
         """
@@ -87,17 +87,17 @@ class RepositoryDAO:
         RETURN r
         """
         result = db.execute_query(query, {"repo_id": repo_id})
-        
+
         if not result:
             return None
-        
+
         node = convert_neo4j_types(result[0]["r"])
         return Repo(**node)
-    
+
     @staticmethod
     def list_repos() -> List[Repo]:
         """List all repositories
-        
+
         Returns:
             List of Repo instances
         """
@@ -108,14 +108,14 @@ class RepositoryDAO:
 
 class SnapshotDAO:
     """Data Access Object for Snapshot operations"""
-    
+
     @staticmethod
     def create_snapshot(snapshot: Snapshot) -> Snapshot:
         """Create a new snapshot and link to repository
-        
+
         Args:
             snapshot: Snapshot model instance
-            
+
         Returns:
             Created Snapshot instance
         """
@@ -140,17 +140,17 @@ class SnapshotDAO:
             "status": snapshot.status.value,
             "lang_profile": json.dumps(snapshot.lang_profile),
             "config_fingerprint": snapshot.config_fingerprint,
-            "created_at": snapshot.created_at.isoformat()
+            "created_at": snapshot.created_at.isoformat(),
         }
-        
-        result = db.execute_write(query, params)
+
+        db.execute_write(query, params)
         logger.info(f"Created snapshot: {snapshot.snapshot_id}")
         return snapshot
-    
+
     @staticmethod
     def update_snapshot_status(snapshot_id: str, status: SnapshotStatus) -> None:
         """Update snapshot status
-        
+
         Args:
             snapshot_id: Snapshot ID
             status: New status
@@ -161,11 +161,13 @@ class SnapshotDAO:
         """
         db.execute_write(query, {"snapshot_id": snapshot_id, "status": status.value})
         logger.info(f"Updated snapshot {snapshot_id} status to {status.value}")
-    
+
     @staticmethod
-    def update_snapshot_lang_profile(snapshot_id: str, lang_profile: Dict[str, int]) -> None:
+    def update_snapshot_lang_profile(
+        snapshot_id: str, lang_profile: Dict[str, int]
+    ) -> None:
         """Update snapshot language profile
-        
+
         Args:
             snapshot_id: Snapshot ID
             lang_profile: Language profile dictionary
@@ -174,19 +176,19 @@ class SnapshotDAO:
         MATCH (s:Snapshot {snapshot_id: $snapshot_id})
         SET s.lang_profile = $lang_profile
         """
-        db.execute_write(query, {
-            "snapshot_id": snapshot_id,
-            "lang_profile": json.dumps(lang_profile)
-        })
+        db.execute_write(
+            query,
+            {"snapshot_id": snapshot_id, "lang_profile": json.dumps(lang_profile)},
+        )
         logger.info(f"Updated snapshot {snapshot_id} lang_profile")
-    
+
     @staticmethod
     def get_snapshot(snapshot_id: str) -> Optional[Snapshot]:
         """Get snapshot by ID
-        
+
         Args:
             snapshot_id: Snapshot ID
-            
+
         Returns:
             Snapshot instance or None
         """
@@ -195,20 +197,20 @@ class SnapshotDAO:
         RETURN s
         """
         result = db.execute_query(query, {"snapshot_id": snapshot_id})
-        
+
         if not result:
             return None
-        
+
         node = convert_neo4j_types(result[0]["s"])
         return Snapshot(**node)
-    
+
     @staticmethod
     def list_snapshots(repo_id: str) -> List[Snapshot]:
         """List all snapshots for a repository
-        
+
         Args:
             repo_id: Repository ID
-            
+
         Returns:
             List of Snapshot instances
         """
@@ -222,14 +224,14 @@ class SnapshotDAO:
 
 class FileDAO:
     """Data Access Object for File operations"""
-    
+
     @staticmethod
     def create_file(file: File) -> File:
         """Create a new file node and link to snapshot
-        
+
         Args:
             file: File model instance
-            
+
         Returns:
             Created File instance
         """
@@ -256,23 +258,23 @@ class FileDAO:
             "sha256": file.sha256,
             "loc": file.loc,
             "is_test": file.is_test,
-            "tags": file.tags
+            "tags": file.tags,
         }
-        
+
         db.execute_write(query, params)
         logger.debug(f"Created file: {file.path}")
         return file
-    
+
     @staticmethod
     def batch_create_files(files: List[File]) -> None:
         """Batch create multiple files
-        
+
         Args:
             files: List of File instances
         """
         if not files:
             return
-        
+
         query = """
         UNWIND $files AS file_data
         MATCH (s:Snapshot {snapshot_id: file_data.snapshot_id})
@@ -288,7 +290,7 @@ class FileDAO:
         })
         CREATE (s)-[:CONTAINS_FILE]->(f)
         """
-        
+
         files_data = [
             {
                 "file_id": f.file_id,
@@ -298,21 +300,21 @@ class FileDAO:
                 "sha256": f.sha256,
                 "loc": f.loc,
                 "is_test": f.is_test,
-                "tags": f.tags
+                "tags": f.tags,
             }
             for f in files
         ]
-        
+
         db.execute_write(query, {"files": files_data})
         logger.info(f"Batch created {len(files)} files")
-    
+
     @staticmethod
     def get_files_by_snapshot(snapshot_id: str) -> List[File]:
         """Get all files in a snapshot
-        
+
         Args:
             snapshot_id: Snapshot ID
-            
+
         Returns:
             List of File instances
         """
@@ -326,14 +328,14 @@ class FileDAO:
 
 class SymbolDAO:
     """Data Access Object for Symbol operations"""
-    
+
     @staticmethod
     def create_symbol(symbol: Symbol) -> Symbol:
         """Create a new symbol node
-        
+
         Args:
             symbol: Symbol model instance
-            
+
         Returns:
             Created Symbol instance
         """
@@ -364,23 +366,23 @@ class SymbolDAO:
             "signature": symbol.signature,
             "start_line": symbol.start_line,
             "end_line": symbol.end_line,
-            "meta": json.dumps(symbol.meta)
+            "meta": json.dumps(symbol.meta),
         }
-        
+
         db.execute_write(query, params)
         logger.debug(f"Created symbol: {symbol.qualname}")
         return symbol
-    
+
     @staticmethod
     def batch_create_symbols(symbols: List[Symbol]) -> None:
         """Batch create multiple symbols
-        
+
         Args:
             symbols: List of Symbol instances
         """
         if not symbols:
             return
-        
+
         query = """
         UNWIND $symbols AS sym_data
         MATCH (f:File {file_id: sym_data.file_id})
@@ -398,7 +400,7 @@ class SymbolDAO:
         })
         CREATE (f)-[:DEFINES_SYMBOL]->(sym)
         """
-        
+
         symbols_data = [
             {
                 "symbol_id": s.symbol_id,
@@ -410,28 +412,28 @@ class SymbolDAO:
                 "signature": s.signature,
                 "start_line": s.start_line,
                 "end_line": s.end_line,
-                "meta": json.dumps(s.meta)
+                "meta": json.dumps(s.meta),
             }
             for s in symbols
         ]
-        
+
         db.execute_write(query, {"symbols": symbols_data})
         logger.info(f"Batch created {len(symbols)} symbols")
 
 
 class ImportDAO:
     """Data Access Object for Import operations"""
-    
+
     @staticmethod
     def batch_create_imports(imports: List[Import]) -> None:
         """Batch create import nodes
-        
+
         Args:
             imports: List of Import instances
         """
         if not imports:
             return
-        
+
         query = """
         UNWIND $imports AS imp_data
         MATCH (f:File {file_id: imp_data.file_id})
@@ -447,7 +449,7 @@ class ImportDAO:
         })
         CREATE (f)-[:HAS_IMPORT]->(i)
         """
-        
+
         imports_data = [
             {
                 "import_id": i.import_id,
@@ -457,23 +459,20 @@ class ImportDAO:
                 "imported_names": json.dumps(i.imported_names),
                 "alias": i.alias,
                 "is_relative": i.is_relative,
-                "line_number": i.line_number
+                "line_number": i.line_number,
             }
             for i in imports
         ]
-        
+
         db.execute_write(query, {"imports": imports_data})
         logger.info(f"Batch created {len(imports)} imports")
-    
+
     @staticmethod
     def create_import_edge(
-        src_file_id: str,
-        dst_file_id: str,
-        module_name: str,
-        line_number: int
+        src_file_id: str, dst_file_id: str, module_name: str, line_number: int
     ) -> None:
         """Create IMPORTS relationship between files
-        
+
         Args:
             src_file_id: Source file ID
             dst_file_id: Destination file ID
@@ -486,24 +485,27 @@ class ImportDAO:
         MERGE (src)-[r:IMPORTS {module: $module_name}]->(dst)
         ON CREATE SET r.line_number = $line_number
         """
-        
-        db.execute_write(query, {
-            "src_file_id": src_file_id,
-            "dst_file_id": dst_file_id,
-            "module_name": module_name,
-            "line_number": line_number
-        })
-    
+
+        db.execute_write(
+            query,
+            {
+                "src_file_id": src_file_id,
+                "dst_file_id": dst_file_id,
+                "module_name": module_name,
+                "line_number": line_number,
+            },
+        )
+
     @staticmethod
     def batch_create_import_edges(edges: List[Dict[str, Any]]) -> None:
         """Batch create import edges
-        
+
         Args:
             edges: List of edge dictionaries with src_file_id, dst_file_id, module, line
         """
         if not edges:
             return
-        
+
         query = """
         UNWIND $edges AS edge
         MATCH (src:File {file_id: edge.src_file_id})
@@ -511,17 +513,17 @@ class ImportDAO:
         MERGE (src)-[r:IMPORTS {module: edge.module}]->(dst)
         ON CREATE SET r.line_number = edge.line_number
         """
-        
+
         db.execute_write(query, {"edges": edges})
         logger.info(f"Batch created {len(edges)} import edges")
-    
+
     @staticmethod
     def get_file_imports(file_id: str) -> List[Dict[str, Any]]:
         """Get all imports for a file
-        
+
         Args:
             file_id: File ID
-            
+
         Returns:
             List of import dictionaries
         """
@@ -530,14 +532,14 @@ class ImportDAO:
         RETURN imported.file_id as file_id, imported.path as path
         """
         return db.execute_query(query, {"file_id": file_id})
-    
+
     @staticmethod
     def get_import_graph(snapshot_id: str) -> List[Dict[str, Any]]:
         """Get the complete import dependency graph
-        
+
         Args:
             snapshot_id: Snapshot ID
-            
+
         Returns:
             List of import relationships
         """
@@ -548,15 +550,15 @@ class ImportDAO:
         ORDER BY src.path
         """
         return db.execute_query(query, {"snapshot_id": snapshot_id})
-    
+
     @staticmethod
     def get_file_dependencies(snapshot_id: str, file_path: str) -> List[Dict[str, Any]]:
         """Get all files that depend on this file (reverse dependencies)
-        
+
         Args:
             snapshot_id: Snapshot ID
             file_path: File path to find dependencies for
-            
+
         Returns:
             List of dependent files
         """
@@ -566,27 +568,24 @@ class ImportDAO:
         RETURN dependent.path as dependent_file, dependent.file_id as file_id
         ORDER BY dependent.path
         """
-        return db.execute_query(query, {
-            "snapshot_id": snapshot_id,
-            "file_path": file_path
-        })
+        return db.execute_query(
+            query, {"snapshot_id": snapshot_id, "file_path": file_path}
+        )
 
 
 class EndpointDAO:
     """Data Access Object for Endpoint operations"""
-    
+
     @staticmethod
     def batch_create_endpoints(endpoints: List) -> None:
         """Batch create endpoint nodes
-        
+
         Args:
             endpoints: List of Endpoint instances
         """
         if not endpoints:
             return
-        
-        from src.models import Endpoint
-        
+
         query = """
         UNWIND $endpoints AS ep_data
         MATCH (f:File {file_id: ep_data.file_id})
@@ -611,7 +610,7 @@ class EndpointDAO:
         MATCH (s:Symbol {symbol_id: ep_data.symbol_id})
         CREATE (e)-[:HANDLED_BY]->(s)
         """
-        
+
         endpoints_data = [
             {
                 "endpoint_id": e.endpoint_id,
@@ -626,18 +625,18 @@ class EndpointDAO:
                 "description": e.description,
                 "response_model": e.response_model,
                 "status_code": e.status_code,
-                "deprecated": e.deprecated
+                "deprecated": e.deprecated,
             }
             for e in endpoints
         ]
-        
+
         db.execute_write(query, {"endpoints": endpoints_data})
         logger.info(f"Batch created {len(endpoints)} endpoints")
-    
+
     @staticmethod
     def link_endpoint_to_handler(endpoint_id: str, symbol_id: str) -> None:
         """Link endpoint to handler function symbol
-        
+
         Args:
             endpoint_id: Endpoint ID
             symbol_id: Symbol ID of handler function
@@ -647,19 +646,16 @@ class EndpointDAO:
         MATCH (s:Symbol {symbol_id: $symbol_id})
         MERGE (e)-[:HANDLED_BY]->(s)
         """
-        
-        db.execute_write(query, {
-            "endpoint_id": endpoint_id,
-            "symbol_id": symbol_id
-        })
-    
+
+        db.execute_write(query, {"endpoint_id": endpoint_id, "symbol_id": symbol_id})
+
     @staticmethod
     def get_endpoints_by_snapshot(snapshot_id: str) -> List[Dict[str, Any]]:
         """Get all endpoints in a snapshot
-        
+
         Args:
             snapshot_id: Snapshot ID
-            
+
         Returns:
             List of endpoint dictionaries
         """
@@ -675,19 +671,17 @@ class EndpointDAO:
 
 class DependencyDAO:
     """Data Access Object for Dependency operations"""
-    
+
     @staticmethod
     def batch_create_dependencies(dependencies: List) -> None:
         """Batch create dependency nodes
-        
+
         Args:
             dependencies: List of Dependency instances
         """
         if not dependencies:
             return
-        
-        from src.models import Dependency
-        
+
         query = """
         UNWIND $dependencies AS dep_data
         CREATE (d:Dependency {
@@ -703,7 +697,7 @@ class DependencyDAO:
         MATCH (e:Endpoint {endpoint_id: dep_data.endpoint_id})
         CREATE (e)-[:DEPENDS_ON]->(d)
         """
-        
+
         dependencies_data = [
             {
                 "dependency_id": d.dependency_id,
@@ -711,18 +705,18 @@ class DependencyDAO:
                 "endpoint_id": d.endpoint_id,
                 "parameter_name": d.parameter_name,
                 "dependency_function": d.dependency_function,
-                "scope": d.scope
+                "scope": d.scope,
             }
             for d in dependencies
         ]
-        
+
         db.execute_write(query, {"dependencies": dependencies_data})
         logger.info(f"Batch created {len(dependencies)} dependencies")
-    
+
     @staticmethod
     def link_dependency_to_endpoint(dependency_id: str, endpoint_id: str) -> None:
         """Link dependency to endpoint
-        
+
         Args:
             dependency_id: Dependency ID
             endpoint_id: Endpoint ID
@@ -732,19 +726,18 @@ class DependencyDAO:
         MATCH (e:Endpoint {endpoint_id: $endpoint_id})
         MERGE (e)-[:DEPENDS_ON]->(d)
         """
-        
-        db.execute_write(query, {
-            "dependency_id": dependency_id,
-            "endpoint_id": endpoint_id
-        })
-    
+
+        db.execute_write(
+            query, {"dependency_id": dependency_id, "endpoint_id": endpoint_id}
+        )
+
     @staticmethod
     def get_endpoint_dependencies(endpoint_id: str) -> List[Dict[str, Any]]:
         """Get all dependencies for an endpoint
-        
+
         Args:
             endpoint_id: Endpoint ID
-            
+
         Returns:
             List of dependency dictionaries
         """
@@ -758,19 +751,17 @@ class DependencyDAO:
 
 class ModelUsageDAO:
     """Data Access Object for ModelUsage operations"""
-    
+
     @staticmethod
     def batch_track_usages(usages: List) -> None:
         """Batch track model usages
-        
+
         Args:
             usages: List of ModelUsage instances
         """
         if not usages:
             return
-        
-        from src.models import ModelUsage
-        
+
         query = """
         UNWIND $usages AS usage_data
         CREATE (m:ModelUsage {
@@ -786,7 +777,7 @@ class ModelUsageDAO:
         MATCH (e:Endpoint {endpoint_id: usage_data.endpoint_id})
         CREATE (e)-[:USES_MODEL]->(m)
         """
-        
+
         usages_data = [
             {
                 "usage_id": u.usage_id,
@@ -794,21 +785,21 @@ class ModelUsageDAO:
                 "endpoint_id": u.endpoint_id,
                 "model_name": u.model_name,
                 "usage_type": u.usage_type,
-                "is_list": u.is_list
+                "is_list": u.is_list,
             }
             for u in usages
         ]
-        
+
         db.execute_write(query, {"usages": usages_data})
         logger.info(f"Batch tracked {len(usages)} model usages")
-    
+
     @staticmethod
     def get_models_for_endpoint(endpoint_id: str) -> List[Dict[str, Any]]:
         """Get all model usages for an endpoint
-        
+
         Args:
             endpoint_id: Endpoint ID
-            
+
         Returns:
             List of model usage dictionaries
         """
@@ -818,4 +809,3 @@ class ModelUsageDAO:
         RETURN m.model_name as model_name, m.usage_type as usage_type, m.is_list as is_list
         """
         return db.execute_query(query, {"endpoint_id": endpoint_id})
-
