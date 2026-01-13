@@ -101,33 +101,25 @@ class CodeChatService:
         """
         Determine if query requires code retrieval
         
-        Returns True for code-specific questions, False for general questions
+        Returns True for most questions to ensure we always have codebase context
         """
-        # Keywords that indicate code-specific questions
-        code_keywords = [
-            "function", "class", "method", "code", "implementation",
-            "how does", "show me", "explain the code", "what does this",
-            "parse", "handle", "process", "algorithm", "logic"
-        ]
-        
-        # Keywords that indicate general questions
-        general_keywords = [
-            "what is this project", "what are the features", "overview",
-            "purpose", "what does this project do", "architecture",
-            "tech stack", "dependencies"
+        # Keywords that indicate we definitely DON'T need code
+        # (very rare - only for meta questions about the chat system itself)
+        no_code_keywords = [
+            "how do i use this chat",
+            "what can you do",
+            "help me use",
+            "how does this assistant work"
         ]
         
         query_lower = query.lower()
         
-        # Check for general questions first
-        if any(keyword in query_lower for keyword in general_keywords):
+        # Only skip code retrieval for meta questions about the chat system
+        if any(keyword in query_lower for keyword in no_code_keywords):
             return False
         
-        # Check for code-specific questions
-        if any(keyword in query_lower for keyword in code_keywords):
-            return True
-        
-        # Default: retrieve code for ambiguous queries
+        # Default: ALWAYS retrieve code to provide accurate, context-aware answers
+        # This includes project overview questions, which should reference actual code
         return True
     
     def _build_code_context(self, chunks: List[Dict[str, Any]]) -> str:
@@ -167,7 +159,7 @@ Symbol: {chunk['symbol_name']} ({chunk['symbol_kind']})
         
         # Build prompt
         if code_context:
-            # Code-specific response
+            # Code-specific response with actual codebase context
             prompt = f"""You are a helpful AI assistant that explains code from a Python codebase.
 
 {history_text}
@@ -178,12 +170,13 @@ Symbol: {chunk['symbol_name']} ({chunk['symbol_kind']})
 {code_context}
 
 **Instructions:**
-1. Answer the user's question clearly and conversationally
-2. Reference the specific code snippets when relevant
-3. Explain what the code does in simple terms
-4. If showing code, use proper formatting
-5. Be concise but thorough
-6. Maintain conversation context from previous messages
+1. Answer the user's question based ONLY on the code provided above
+2. If asked about "this project", describe what you can see from the actual code files
+3. Reference specific files, functions, and classes you see in the code
+4. Explain what the code does in simple, clear terms
+5. Be conversational and helpful
+6. If the code doesn't fully answer the question, say so honestly
+7. DO NOT make up information - only use what's in the provided code
 
 **Your Response:**
 """

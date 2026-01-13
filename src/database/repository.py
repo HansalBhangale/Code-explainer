@@ -560,15 +560,21 @@ class ImportDAO:
         Returns:
             List of dependent files
         """
+        # Normalize path to handle both forward slash and backslash
+        file_path_forward = file_path.replace('\\', '/')
+        file_path_back = file_path.replace('/', '\\')
+        
         query = """
-        MATCH (dependent:File)-[:IMPORTS]->(f:File {path: $file_path})
+        MATCH (dependent:File)-[:IMPORTS]->(f:File)
         WHERE f.snapshot_id = $snapshot_id
-        RETURN dependent.path as dependent_file, dependent.file_id as file_id
+        AND (f.path = $file_path_forward OR f.path = $file_path_back)
+        RETURN dependent.path as file_path, dependent.file_id as file_id
         ORDER BY dependent.path
         """
         return db.execute_query(query, {
             "snapshot_id": snapshot_id,
-            "file_path": file_path
+            "file_path_forward": file_path_forward,
+            "file_path_back": file_path_back
         })
 
 
