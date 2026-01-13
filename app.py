@@ -167,7 +167,8 @@ with st.sidebar:
             "💬 Chat",
             "🔍 Search",
             "📊 Call Graph",
-            "🏷️ Types"
+            "🏷️ Types",
+            "🔬 Deep Trace"
         ]
     )
     
@@ -894,6 +895,168 @@ elif mode == "🏷️ Types":
                         st.error(f"❌ Error: {response.status_code}")
                 except Exception as e:
                     st.error(f"❌ Failed: {str(e)}")
+
+# ============================================================================
+# DEEP TRACE
+# ============================================================================
+elif mode == "🔬 Deep Trace":
+    st.markdown("## 🔬 Deep Trace Mode")
+    st.caption("Visualize request execution flow from route to database")
+    
+    if not st.session_state.current_snapshot:
+        st.warning("⚠️ Please select a repository and snapshot first")
+    else:
+        # Load API endpoints for selection
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            if st.button("📋 Load API Endpoints", use_container_width=True):
+                try:
+                    response = requests.get(
+                        f"{API_BASE}/api/v1/snapshots/{st.session_state.current_snapshot}/api-surface"
+                    )
+                    if response.status_code == 200:
+                        data = response.json()
+                        st.session_state.trace_endpoints = data.get('endpoints', [])
+                        st.success(f"Loaded {len(st.session_state.trace_endpoints)} endpoints")
+                except Exception as e:
+                    st.error(f"❌ Failed to load endpoints: {str(e)}")
+        
+        # Endpoint selector
+        if st.session_state.get('trace_endpoints'):
+            endpoints = st.session_state.trace_endpoints
+            
+            # Create endpoint options
+            endpoint_options = {}
+            for ep in endpoints:
+                method = ep.get('http_method', 'GET')
+                path = ep.get('path', '')
+                label = f"{method} {path}"
+                endpoint_options[label] = (path, method)
+            
+            selected_endpoint = st.selectbox(
+                "Select Endpoint to Trace",
+                options=list(endpoint_options.keys())
+            )
+            
+            if selected_endpoint:
+                endpoint_path, http_method = endpoint_options[selected_endpoint]
+                
+                # Display endpoint info
+                col1, col2 = st.columns([1, 4])
+                with col1:
+                    method_color = {
+                        "GET": "🟢",
+                        "POST": "🟡",
+                        "PUT": "🔵",
+                        "DELETE": "🔴",
+                        "PATCH": "🟠"
+                    }.get(http_method, "⚪")
+                    st.markdown(f"### {method_color} {http_method}")
+                with col2:
+                    st.markdown(f"### `{endpoint_path}`")
+                
+                # Trace button
+                if st.button("🔬 Trace Execution Flow", use_container_width=True):
+                    with st.spinner("Analyzing execution flow..."):
+                        try:
+                            response = requests.get(
+                                f"{API_BASE}/api/v1/trace",
+                                params={
+                                    "endpoint_path": endpoint_path,
+                                    "http_method": http_method,
+                                    "snapshot_id": st.session_state.current_snapshot
+                                }
+                            )
+                            
+                            if response.status_code == 200:
+                                trace_data = response.json()
+                                
+                                # Display Mermaid diagram visually
+                                st.markdown("### 📊 Execution Flow Diagram")
+                                mermaid_code = trace_data.get('mermaid_diagram', '')
+                                if mermaid_code:
+                                    # Render Mermaid diagram using HTML with embedded JS
+                                    mermaid_html = f"""
+                                    <div class="mermaid-container" style="background: white; padding: 20px; border-radius: 10px; margin: 10px 0;">
+                                        <pre class="mermaid" style="background: white;">
+{mermaid_code}
+                                        </pre>
+                                    </div>
+                                    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+                                    <script>
+                                        mermaid.initialize({{ startOnLoad: true, theme: 'default' }});
+                                    </script>
+                                    """
+                                    st.components.v1.html(mermaid_html, height=400, scrolling=True)
+                                    
+                                    # Show raw code in expander for debugging
+                                    with st.expander("📝 View Mermaid Code"):
+                                        st.code(mermaid_code, language="mermaid")
+
+                                
+                                # Display execution summary
+                                st.markdown("---")
+                                summary = trace_data.get('execution_summary', '')
+                                if summary:
+                                    st.markdown(summary)
+                                
+                                # Display nodes
+                                nodes = trace_data.get('nodes', [])
+                                if nodes:
+                                    st.markdown("---")
+                                    st.markdown("### 🔍 Execution Steps")
+                                    
+                                    for i, node in enumerate(nodes, 1):
+                                        node_type = node.get('node_type', 'unknown')
+                                        node_name = node.get('name', 'Unknown')
+                                        file_path = node.get('file_path', '')
+                                        line_number = node.get('line_number', 0)
+                                        
+                                        # Icon based on node type
+                                        icon = {
+                                            "route": "🌐",
+                                            "handler": "⚡",
+                                            "service": "🔧",
+                                            "database": "💾",
+                                            "error_handler": "⚠️"
+                                        }.get(node_type, "📦")
+                                        
+                                        with st.expander(f"{i}. {icon} {node_name}"):
+                                            col1, col2 = st.columns(2)
+                                            with col1:
+                                                st.write(f"**Type:** {node_type}")
+                                                st.write(f"**File:** `{file_path}`")
+                                            with col2:
+                                                st.write(f"**Line:** {line_number}")
+                                                calls = node.get('calls', [])
+                                                if calls:
+                                                    st.write(f"**Calls:** {len(calls)} functions")
+                                
+                                # Display error boundaries
+                                error_boundaries = trace_data.get('error_boundaries', [])
+                                if error_boundaries:
+                                    st.markdown("---")
+                                    st.markdown("### ⚠️ Error Boundaries")
+                                    
+                                    for error in error_boundaries:
+                                        error_type = error.get('error_type', 'unknown')
+                                        exception_types = error.get('exception_types', [])
+                                        line_number = error.get('line_number', 0)
+                                        
+                                        st.error(f"**{error_type}** at line {line_number}: {', '.join(exception_types)}")
+                                
+                                # Display LLM-powered explanation
+                                llm_explanation = trace_data.get('llm_explanation')
+                                if llm_explanation:
+                                    st.markdown("---")
+                                    st.markdown("### 🤖 AI Detailed Explanation")
+                                    st.markdown(llm_explanation)
+                                
+                            else:
+                                st.error(f"❌ Error: {response.status_code}")
+                        except Exception as e:
+                            st.error(f"❌ Failed to trace endpoint: {str(e)}")
+
 
 # Footer
 st.markdown("---")

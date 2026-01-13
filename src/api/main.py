@@ -523,6 +523,198 @@ async def get_api_surface_map(snapshot_id: str):
         )
 
 
+# ============================================================================
+# Deep Trace Endpoint
+# ============================================================================
+
+@app.get("/api/v1/trace")
+async def trace_endpoint_flow(
+    endpoint_path: str,
+    http_method: str = "GET",
+    snapshot_id: Optional[str] = None,
+    include_llm_explanation: bool = True
+):
+    """Trace execution flow for a specific FastAPI endpoint
+    
+    Args:
+        endpoint_path: API endpoint path (e.g., "/api/v1/repos")
+        http_method: HTTP method (GET, POST, etc.)
+        snapshot_id: Optional snapshot ID
+        include_llm_explanation: Whether to include LLM-powered explanation
+        
+    Returns:
+        TraceResult with execution flow, error boundaries, Mermaid diagram, and LLM explanation
+    """
+    try:
+        from pathlib import Path
+        from src.services.trace_engine import TraceEngine
+        
+        # Get project root and main.py path
+        project_root = Path(__file__).parent.parent.parent
+        main_file = Path(__file__)
+        
+        # Use a default snapshot_id if not provided
+        if not snapshot_id:
+            snapshot_id = "current"
+        
+        # Create trace engine and trace the endpoint
+        engine = TraceEngine(project_root)
+        trace_result = engine.trace_endpoint(
+            endpoint_path=endpoint_path,
+            http_method=http_method.upper(),
+            snapshot_id=snapshot_id,
+            main_file=main_file
+        )
+        
+        # Use LLM to generate diagram and explanation
+        llm_result = None
+        if include_llm_explanation:
+            try:
+                llm_result = await _get_llm_trace_analysis(
+                    endpoint_path,
+                    http_method,
+                    engine.get_trace_for_llm()
+                )
+            except Exception as e:
+                logger.warning(f"LLM analysis failed: {e}")
+                llm_result = {
+                    "mermaid_diagram": trace_result.mermaid_diagram,
+                    "explanation": "LLM explanation not available."
+                }
+        
+        # Return result with LLM-generated content
+        return {
+            **trace_result.dict(),
+            "mermaid_diagram": llm_result["mermaid_diagram"] if llm_result else trace_result.mermaid_diagram,
+            "llm_explanation": llm_result["explanation"] if llm_result else None
+        }
+    except Exception as e:
+        logger.error(f"Failed to trace endpoint: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+async def _get_llm_trace_analysis(
+    endpoint_path: str,
+    http_method: str,
+    trace_data: str
+) -> Dict[str, str]:
+    """Get LLM-powered Mermaid diagram and explanation"""
+    try:
+        import google.generativeai as genai
+        from src.config import settings
+        
+        genai.configure(api_key=settings.gemini_api_key)
+        model = genai.GenerativeModel(settings.gemini_model)
+        
+        prompt = f"""You are an expert code analyst. Analyze this API endpoint execution trace and generate:
+
+1. A Mermaid flowchart diagram showing the sequential execution flow
+2. A detailed explanation of the endpoint
+
+**Endpoint:** {http_method} {endpoint_path}
+
+**Execution Trace:**
+{trace_data}
+
+**YOUR RESPONSE MUST BE IN THIS EXACT FORMAT:**
+
+## MERMAID_DIAGRAM_START
+```mermaid
+flowchart TD
+    A["Step 1: API Request"] --> B["Step 2: Handler"]
+    B --> C["Step 3: Processing"]
+    C --> D["Step 4: Response"]
+```
+## MERMAID_DIAGRAM_END
+
+## EXPLANATION_START
+### Overview
+(What this endpoint does in 1-2 sentences)
+
+### Step-by-Step Flow
+(Explain each step in the execution sequence)
+
+### Data Flow
+(How data moves through the system)
+
+### Error Handling
+(How errors are caught and handled)
+
+### Key Insights
+(Any notable patterns or best practices)
+## EXPLANATION_END
+
+**CRITICAL MERMAID RULES - FOLLOW EXACTLY:**
+1. ALWAYS use double quotes for ALL labels: A["Label text"]
+2. Use simple node IDs: A, B, C, D, E (single letters)
+3. Do NOT use special characters like : / < > in labels
+4. Replace / with - and : with blank in label text
+5. Use --> for solid arrows
+6. Use -.-> for dashed arrows (error paths)
+7. Use subgraph Name\\n...\\nend for grouping
+8. Keep labels SHORT - max 5 words per label
+
+EXAMPLE OF CORRECT SYNTAX:
+```mermaid
+flowchart TD
+    A["POST api-v1-ingest-git"] --> B["ingest_git_repository handler"]
+    B --> C["RepositoryIngestor init"]
+    C --> D["Process git repo"]
+    D --> E["Return IngestResponse"]
+    C -.-> F["Error - HTTPException"]
+```"""
+
+
+        response = model.generate_content(prompt)
+        response_text = response.text
+        
+        # Parse the response to extract diagram and explanation
+        mermaid_diagram = "flowchart TD\n    A[Diagram generation failed]"
+        explanation = "Unable to parse LLM response."
+        
+        # Extract Mermaid diagram
+        if "MERMAID_DIAGRAM_START" in response_text and "MERMAID_DIAGRAM_END" in response_text:
+            start = response_text.find("MERMAID_DIAGRAM_START") + len("MERMAID_DIAGRAM_START")
+            end = response_text.find("MERMAID_DIAGRAM_END")
+            mermaid_section = response_text[start:end].strip()
+            
+            # Extract just the mermaid code
+            if "```mermaid" in mermaid_section:
+                mermaid_start = mermaid_section.find("```mermaid") + len("```mermaid")
+                mermaid_end = mermaid_section.find("```", mermaid_start)
+                mermaid_diagram = mermaid_section[mermaid_start:mermaid_end].strip()
+            elif "```" in mermaid_section:
+                mermaid_start = mermaid_section.find("```") + 3
+                mermaid_end = mermaid_section.find("```", mermaid_start)
+                mermaid_diagram = mermaid_section[mermaid_start:mermaid_end].strip()
+            else:
+                mermaid_diagram = mermaid_section
+        
+        # Extract explanation
+        if "EXPLANATION_START" in response_text and "EXPLANATION_END" in response_text:
+            start = response_text.find("EXPLANATION_START") + len("EXPLANATION_START")
+            end = response_text.find("EXPLANATION_END")
+            explanation = response_text[start:end].strip()
+        elif "### Overview" in response_text:
+            # Fallback: find from Overview to end
+            start = response_text.find("### Overview")
+            explanation = response_text[start:].strip()
+        
+        return {
+            "mermaid_diagram": mermaid_diagram,
+            "explanation": explanation
+        }
+    except Exception as e:
+        logger.error(f"LLM trace analysis failed: {e}")
+        return {
+            "mermaid_diagram": "flowchart TD\n    A[LLM Error]",
+            "explanation": f"Unable to generate LLM analysis: {str(e)}"
+        }
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
